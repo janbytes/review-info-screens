@@ -1,0 +1,55 @@
+{
+  "sessions": [
+    {
+      "id": 1776879290484,
+      "name": "race",
+      "status": "finished",
+      "drivers": [
+        {
+          "name": "dfsdf",
+          "car": 1,
+          "laps": [
+            1776879404279,
+            1776879419503
+          ]
+        },
+        {
+          "name": "sdfsdf",
+          "car": 2,
+          "laps": [
+            1776879392444,
+            1776879403413,
+            1776879411336,
+            1776879415241
+          ]
+        },
+        {
+          "name": "dfgdfgdf",
+          "car": 5,
+          "laps": [
+            1776879405771,
+            1776879416946,
+            1776879417128,
+            1776879417282,
+            1776879417458
+          ]
+        },
+        {
+          "name": "dfgdfgdfgrtey",
+          "car": 3,
+          "laps": [
+            1776879390996,
+            1776879406581,
+            1776879419922
+          ]
+        }
+      ]
+    }
+  ],
+  "currentRaceState": {
+    "isActive": false,
+    "timeLeft": 0,
+    "currentRaceId": 1776879290484,
+    "currentMode": "finished"
+  }
+}

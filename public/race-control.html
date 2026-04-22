@@ -1,0 +1,340 @@
+<!--
+  Interface for the Safety Official to control the race mode (safe, hazard, danger, finished).
+  Also handles starting the race and ending the session.
+  Requires authentication with the safety key.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Race Control - Beachside Racetrack</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body>
+
+  <!-- TOAST NOTIFICATION: appears briefly at the bottom when an action succeeds or fails -->
+  <div id="toast" class="toast"></div>
+
+  <!-- LOGIN SECTION -->
+  <div id="login-section" class="login-wrap">
+    <div>
+      <p class="login-brand">Beachside Racetrack</p>
+      <div class="card login-card">
+        <h2>RACE CONTROL LOGIN</h2>
+        <input type="password" id="key" placeholder="Enter safety key" onkeydown="if(event.key==='Enter') login()">
+        <button id="btn-login" class="btn" onclick="login()">Log In</button>
+        <p id="status-message"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN CONTROLS -->
+  <div id="main-content" style="display:none;">
+
+    <div class="page-header">
+      <h1>BEACHSIDE RACETRACK</h1>
+      <span class="subtitle">Race Control</span>
+    </div>
+
+    <div class="controls-wrap page-content">
+
+      <!-- START RACE SECTION -->
+      <div id="start-section">
+        <h2>START RACE</h2>
+        <select id="session-select" onchange="showDriverPreview(this.value)">
+          <option value="">-- Select session --</option>
+        </select>
+        <div id="driver-preview"></div>
+        <button id="btn-start" class="btn" onclick="startRace()">Start Race</button>
+      </div>
+
+      <!-- RACE MODE SECTION (hidden until race starts) -->
+      <div id="mode-section" style="display:none;">
+        <div id="race-timer-display">--:--</div>
+        <div id="race-session-name"></div>
+        <div id="mode-display">
+          <span class="mode-label-text">Current Mode</span>
+          <strong id="mode-label">–</strong>
+        </div>
+
+        <div id="mode-buttons">
+          <button id="btn-safe" class="btn" onclick="changeMode('safe')">Set SAFE (Green)</button>
+          <button id="btn-hazard" class="btn" onclick="changeMode('hazard')">Set HAZARD (Yellow)</button>
+          <button id="btn-danger" class="btn" onclick="changeMode('danger')">Set DANGER (Red)</button>
+          <button id="btn-finished" class="btn" onclick="changeMode('finished')">FINISH RACE</button>
+        </div>
+
+        <!-- Shown only after the race is finished, allows the Safety Official to end the session -->
+        <div id="end-section" style="display:none;">
+          <button id="btn-end-session" class="btn" onclick="endSession()">End Session &amp; Return</button>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const socket = io({ transports: ['websocket'] }); // Force WebSocket only — disables polling fallback
+
+    let allSessions = []; // Stores all sessions received from the server for dropdown and preview
+
+    // --- TOAST NOTIFICATION ---
+    function showToast(message) {
+      const toast = document.getElementById('toast');
+      toast.innerText = message;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3500);
+    }
+
+    // --- AUTHENTICATION ---
+    function login() {
+      const key = document.getElementById('key').value;
+      socket.emit('auth:check', { key: key, role: 'safety' });
+    }
+
+    socket.on('auth:error', (data) => {
+      const msg = document.getElementById('status-message');
+      msg.style.color = '#e05555';
+      msg.innerText = data.message;
+    });
+
+    socket.on('auth:success', () => {
+      document.getElementById('login-section').style.display = 'none';
+      document.getElementById('status-message').innerText = '';
+      document.getElementById('main-content').style.display = 'block';
+      const header = document.querySelector('.page-header');
+      if (header) {
+        header.classList.remove('line-animate');
+        void header.offsetWidth; // force reflow to restart animation
+        header.classList.add('line-animate');
+      }
+    });
+
+    // --- STATE SYNC ON CONNECT ---
+    socket.on('race:state', (state) => {
+      // Restore the correct UI state based on the race status received from the server
+      if (state.isActive || (state.currentRaceId && state.currentMode !== 'finished')) {
+        showActiveRaceUI(state);
+        document.getElementById('mode-buttons').style.display = 'block';
+        document.getElementById('end-section').style.display = 'none';
+      } else if (state.currentMode === 'finished') {
+        showActiveRaceUI(state);
+        document.getElementById('mode-buttons').style.display = 'none';
+        document.getElementById('end-section').style.display = 'block';
+      } else {
+        showSetupUI();
+      }
+
+      // Sync timer
+      if (state.isActive && state.timeLeft > 0) {
+        document.getElementById('race-timer-display').innerText = formatTime(state.timeLeft);
+      }
+
+      // Sync session name
+      if (state.currentRaceId) {
+        const session = allSessions.find(s => s.id === state.currentRaceId);
+        if (session) setSessionName(session.name);
+      }
+    });
+
+    // Hides the session selector and shows the race mode controls
+    function showActiveRaceUI(state) {
+      document.getElementById('start-section').style.display = 'none';
+      document.getElementById('mode-section').style.display = 'block';
+      if (state.currentMode) {
+        document.getElementById('mode-label').innerText = state.currentMode.toUpperCase();
+      }
+    }
+
+    // Shows the session selector and hides the race mode controls
+    function showSetupUI() {
+      document.getElementById('start-section').style.display = 'block';
+      document.getElementById('mode-section').style.display = 'none';
+    }
+
+    // --- DRIVER PREVIEW ---
+    function showDriverPreview(sessionId) {
+      const container = document.getElementById('driver-preview');
+      if (!container) return;
+
+      const session = allSessions.find(s => s.id === parseInt(sessionId));
+      if (!session) { container.innerHTML = ''; return; }
+
+      if (session.drivers.length === 0) {
+        container.innerHTML = `<div class="driver-preview"><div class="driver-preview-empty">No drivers in this session.</div></div>`;
+        return;
+      }
+
+      container.innerHTML = `
+        <div class="driver-preview">
+          <div class="driver-preview-header">Drivers</div>
+          ${session.drivers.map(d => `
+            <div class="driver-preview-row">
+              <span>${d.name}</span>
+              <span>Car #${d.car}</span>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // --- START RACE ---
+    function startRace() {
+      const sessionId = document.getElementById('session-select').value;
+      if (!sessionId) {
+        showToast('Please select a session first!');
+        return;
+      }
+      socket.emit('race:start', { sessionId: parseInt(sessionId) });
+    }
+
+    socket.on('race:started', (data) => {
+      document.getElementById('start-section').style.display = 'none';
+      document.getElementById('mode-section').style.display = 'block';
+      document.getElementById('mode-buttons').style.display = 'block';
+      document.getElementById('end-section').style.display = 'none';
+
+      const session = allSessions.find(s => s.id === data.sessionId);
+      if (session) setSessionName(session.name);
+    });
+
+    socket.on('race:error', (data) => {
+      showToast(data.message);
+    });
+
+    // --- SESSION NAME ---
+    function setSessionName(name) {
+      const el = document.getElementById('race-session-name');
+      if (!el) return;
+      el.innerHTML = name ? `Race Session: <span>${name.toUpperCase()}</span>` : '';
+    }
+
+    // --- TIMER ---
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    socket.on('timer:update', (data) => {
+      document.getElementById('race-timer-display').innerText = formatTime(data.timeLeft);
+    });
+
+    socket.on('race:finished', () => {
+      document.getElementById('race-timer-display').innerText = '00:00';
+    });
+
+    // --- SESSION DROPDOWN ---
+    function updateDropdown(sessions) {
+      allSessions = sessions;
+      const startSection = document.getElementById('start-section');
+      const modeSection = document.getElementById('mode-section');
+      if (!startSection) return;
+
+      const pending = sessions.filter(s => s.status === 'pending' && s.drivers.length > 0);
+
+      if (pending.length > 0) {
+        if (modeSection && modeSection.style.display !== 'block') {
+          startSection.style.display = 'block';
+        }
+
+        startSection.innerHTML = `
+          <h2>START RACE</h2>
+          <select id="session-select" onchange="showDriverPreview(this.value)">
+            <option value="">-- Select session --</option>
+          </select>
+          <div id="driver-preview"></div>
+          <button id="btn-start" class="btn" onclick="startRace()">Start Race</button>
+        `;
+
+        const select = document.getElementById('session-select');
+        pending.forEach(s => {
+          const option = document.createElement('option');
+          option.value = s.id;
+          option.textContent = s.drivers.length === 0 ? `${s.name} (no drivers)` : s.name;
+          select.appendChild(option);
+        });
+
+        // Auto-select the first session and show its driver preview
+        if (select.options.length > 1) {
+          select.selectedIndex = 1;
+          showDriverPreview(select.value);
+        }
+
+      } else {
+        if (modeSection && modeSection.style.display !== 'block') {
+          startSection.style.display = 'block';
+          startSection.innerHTML = `
+            <div class="status-info">
+              <div class="status-title">All sessions completed</div>
+              <div class="status-sub">No more pending races available.</div>
+            </div>
+          `;
+        }
+      }
+    }
+
+    // Update dropdown and ensure start section is visible if no race is active
+    socket.on('data:updated', (sessions) => {
+      updateDropdown(sessions);
+      const modeSection = document.getElementById('mode-section');
+      if (modeSection && modeSection.style.display !== 'block') {
+        document.getElementById('start-section').style.display = 'block';
+      }
+    });
+
+    // --- RACE MODE CONTROL ---
+    function changeMode(mode) {
+      socket.emit('race:change-mode', { mode: mode });
+    }
+
+    // Background and text colors for each race mode
+    const modeColors = {
+      safe: { bg: '#27a24f', color: '#fff' },
+      hazard: { bg: '#e8b800', color: '#111' },
+      danger: { bg: '#dc3545', color: '#fff' },
+      finished: { bg: '#111', color: '#fff' },
+    };
+
+    // Updates the mode label color and shows/hides buttons based on the flag status
+    socket.on('race:flag-updated', (data) => {
+      const label = document.getElementById('mode-label');
+      label.innerText = data.status.toUpperCase();
+      const c = modeColors[data.status];
+      if (c) { label.style.background = c.bg; label.style.color = c.color; }
+
+      if (data.status === 'finished') {
+        document.getElementById('mode-buttons').style.display = 'none';
+        document.getElementById('end-section').style.display = 'block';
+      } else {
+        document.getElementById('mode-buttons').style.display = 'block';
+      }
+    });
+
+    // --- END SESSION ---
+    function endSession() {
+      socket.emit('race:end-session');
+    }
+
+    // Resets the UI back to the session setup state
+    socket.on('race:session-ended', () => {
+      document.getElementById('mode-section').style.display = 'none';
+      document.getElementById('end-section').style.display = 'none';
+      document.getElementById('start-section').style.display = 'block';
+      document.getElementById('mode-buttons').style.display = 'block';
+      document.getElementById('mode-label').innerText = '–';
+      document.getElementById('race-timer-display').innerText = '--:--';
+      setSessionName('');
+    });
+
+  </script>
+
+</body>
+
+</html>

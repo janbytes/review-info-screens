@@ -1,0 +1,49 @@
+<!--
+  Public display showing the current race flag status (safe, hazard, danger, finished).
+  The background color changes to match the active flag color.
+  Updates in real time via Socket.io.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Race Flags - Beachside Racetrack</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body class="page-race-flags">
+  <button id="fs-btn" class="btn btn-secondary btn-sm fs-btn-left"
+    onclick="document.documentElement.requestFullscreen()">Full Screen</button>
+  <div id="flag-text"></div>
+
+  <script>
+    const socket = io({ transports: ['websocket'] }); // Force WebSocket only — disables polling fallback
+    const textElement = document.getElementById('flag-text');
+
+    /**
+     * Updates the flag color by setting a CSS class on the body
+     */
+    function updateFlag(status) {
+      // status is 'safe', 'hazard', 'danger', or 'finished'
+      document.body.className = 'page-race-flags ' + status;
+      textElement.innerText = '';
+    }
+
+    // 1. Listen for the initial state or state after a refresh
+    socket.on('race:state', (state) => {
+      if (state.currentMode) {
+        updateFlag(state.currentMode);
+      }
+    });
+
+    // 2. Listen for real-time flag updates sent by Race Control
+    socket.on('race:flag-updated', (data) => {
+      updateFlag(data.status);
+    });
+  </script>
+</body>
+
+</html>

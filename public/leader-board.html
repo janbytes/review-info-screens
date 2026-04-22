@@ -1,0 +1,176 @@
+<!--
+  Public display showing the live leaderboard during a race.
+  Shows driver positions ranked by best lap time, plus a timer and current flag status.
+  Updates in real time via Socket.io.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Leaderboard - Beachside Racetrack</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body>
+
+  <button id="fs-btn" class="btn btn-secondary btn-sm fs-btn-right"
+    onclick="document.documentElement.requestFullscreen()">Full Screen</button>
+
+  <div class="page-header no-stripe">
+    <h1>BEACHSIDE RACETRACK</h1>
+    <span class="subtitle">Live Leaderboard</span>
+  </div>
+
+  <div id="status-bar">
+    <div id="leaderboard-timer">--:--</div>
+    <div id="flag-indicator">WAITING</div>
+    <div id="race-info"></div>
+  </div>
+
+  <div id="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Pos</th>
+          <th>Driver</th>
+          <th>Car #</th>
+          <th>Laps</th>
+          <th>Last Lap</th>
+          <th>Best Lap</th>
+        </tr>
+      </thead>
+      <tbody id="leaderboard-body">
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    const socket = io({ transports: ['websocket'] }); // Force WebSocket only — disables polling fallback
+
+    // When the leaderboard connects, request the current data state immediately.
+    socket.on('connect', () => {
+      socket.emit('request:data-refresh');
+    });
+
+    // Listens for session data. Clears the table if no active session is found.
+    socket.on('data:updated', (sessions) => {
+      updateLeaderboard(sessions);
+    });
+
+    // When the 'End Session' button is pressed in Race Control, reset the timer and flag.
+    socket.on('race:session-ended', () => {
+      // Reset timer display
+      const timerEl = document.getElementById('leaderboard-timer');
+      if (timerEl) timerEl.innerText = "--:--";
+
+      // Reset flag indicator
+      const flagEl = document.getElementById('flag-indicator');
+      if (flagEl) {
+        flagEl.innerText = "WAITING";
+        flagEl.style.backgroundColor = "#888";
+        flagEl.style.color = "black";
+      }
+    });
+
+    // Main function to process race data and render the table.
+    function updateLeaderboard(sessions) {
+      const tbody = document.getElementById('leaderboard-body');
+      const info = document.getElementById('race-info');
+
+      // Prioritize the active session. If none, show the latest finished session
+      // Prevents the display from getting stuck on old races.
+      const activeSession = sessions.find(s => s.status === 'active') ||
+        sessions.filter(s => s.status === 'finished' || s.status === 'ended').pop();
+      if (!activeSession) {
+        info.innerText = "No active race at the moment.";
+        tbody.innerHTML = "";
+        return;
+      }
+
+      info.innerHTML = `${activeSession.name} <span class="status-badge ${activeSession.status}">${activeSession.status.toUpperCase()}</span>`;
+
+      // Map driver data for calculations
+      let leaderboardData = activeSession.drivers.map(driver => {
+        let laps = driver.laps || [];
+        let lapTimes = [];
+
+        // Calculate time differences between consecutive timestamps (convert ms to seconds)
+        for (let i = 1; i < laps.length; i++) {
+          lapTimes.push((laps[i] - laps[i - 1]) / 1000);
+        }
+
+        // Build a summary object for each driver with lap counts and times
+        return {
+          name: driver.name,
+          car: driver.car,
+          lapCount: laps.length,
+          lastLap: lapTimes.length > 0 ? lapTimes[lapTimes.length - 1].toFixed(3) : "---",
+          bestLap: lapTimes.length > 0 ? Math.min(...lapTimes).toFixed(3) : 999999 // 999999 = no lap yet, sorts to last
+        };
+      });
+
+      // Sort by best lap (fastest/lowest time first)
+      leaderboardData.sort((a, b) => a.bestLap - b.bestLap);
+
+      // Render updated table rows
+      tbody.innerHTML = leaderboardData.map((d, index) => `
+                <tr class="${index === 0 ? 'row-first' : ''}">
+                    <td><span class="pos pos-${index + 1}">P${index + 1}</span></td>
+                    <td>${d.name}</td>
+                    <td><span class="car-badge">#${d.car}</span></td>
+                    <td>${d.lapCount}</td>
+                    <td>${d.lastLap !== '---' ? d.lastLap + 's' : '---'}</td>
+                    <td class="${d.bestLap < 999999 ? 'fastest' : ''}">
+                        ${d.bestLap < 999999 ? d.bestLap + 's' : '---'}
+                    </td>
+                </tr>
+            `).join('');
+    }
+
+    // Syncs the timer display when the page first loads or reconnects
+    socket.on('race:state', (state) => {
+      const timerEl = document.getElementById('leaderboard-timer');
+      if (!timerEl) return;
+      if (state.isActive && state.timeLeft > 0) {
+        const mins = Math.floor(state.timeLeft / 60);
+        const secs = state.timeLeft % 60;
+        timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      }
+    });
+
+    // Updates the timer display every second during a race
+    socket.on('timer:update', (data) => {
+      const timerEl = document.getElementById('leaderboard-timer');
+      if (timerEl) {
+        const mins = Math.floor(data.timeLeft / 60);
+        const secs = data.timeLeft % 60;
+        timerEl.innerText = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+      }
+    });
+
+    // Updates the flag indicator color based on the active race mode
+    socket.on('race:flag-updated', (data) => {
+      const flagEl = document.getElementById('flag-indicator');
+      if (!flagEl) return;
+
+      flagEl.innerText = data.status;
+
+      const colors = {
+        'safe': '#28a745',    // Green
+        'hazard': '#ffc107',  // Yellow
+        'danger': '#dc3545',  // Red
+        'finished': '#343a40', // Dark grey
+        'default': '#888'
+      };
+
+      flagEl.style.backgroundColor = colors[data.status] || colors['default'];
+      flagEl.style.color = data.status === 'hazard' ? 'black' : 'white'; // black text on yellow for readability
+    });
+
+  </script>
+</body>
+
+</html>

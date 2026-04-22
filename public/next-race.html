@@ -1,0 +1,162 @@
+<!--
+  Public display showing the upcoming race session and its drivers.
+  When a session ends, shows a paddock call alert for 60 seconds before returning to the queue.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Display - Next Race</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body>
+
+  <button id="fs-btn" class="btn btn-secondary btn-sm fs-btn-right"
+    onclick="document.documentElement.requestFullscreen()">Full Screen</button>
+
+  <div class="page-header">
+    <h1>BEACHSIDE RACETRACK</h1>
+    <span class="subtitle">Next Race</span>
+  </div>
+
+  <div class="next-race-content">
+    <h2 id="title">UPCOMING SESSIONS</h2>
+    <div id="content">
+      <p class="msg-muted">Waiting for data from race control...</p>
+    </div>
+  </div>
+
+  <script>
+    const socket = io({ transports: ['websocket'] }); // Force WebSocket only — disables polling fallback
+    // Ask for data immediately after connection is established
+    socket.on('connect', () => {
+      socket.emit('request:data-refresh');
+    });
+
+    function triggerLineAnimation() {
+      const header = document.querySelector('.page-header');
+      if (!header) return;
+      header.classList.remove('line-animate');
+      void header.offsetWidth; // Force reflow to restart animation
+      header.classList.add('line-animate');
+    }
+    triggerLineAnimation();
+    window.addEventListener('pageshow', triggerLineAnimation);
+    const contentDiv = document.getElementById('content');
+    const titleEl = document.getElementById('title');
+
+    // Global lock to prioritize Paddock Call over general updates
+    let paddockMessageActive = false;
+    let paddockTimeout = null;
+
+
+    // PADDOCK CALL LOGIC
+    // Triggered when the Safety Official ends a session.
+    socket.on('race:next-session', (data) => {
+      paddockMessageActive = true;
+
+      const session = data.session || null;
+      const isPaddock = data.proceedToPaddock || false;
+
+      // Update UI with the specific Paddock context
+      updateUI(session, isPaddock);
+
+      // Reset existing timers if any
+      if (paddockTimeout) clearTimeout(paddockTimeout);
+
+      // Display must lock for 60 seconds
+      paddockTimeout = setTimeout(() => {
+        paddockMessageActive = false;
+        // Request fresh data to return to the normal upcoming queue
+        socket.emit('request:data-refresh');
+      }, 60000);
+    });
+
+    // Decides which session to display based on the current race state
+    socket.on('data:updated', (sessions) => {
+      // Prevent updates if the 60-second Paddock lock is active
+      if (paddockMessageActive) return;
+
+      const activeSession = sessions.find(s => s.status === 'active');
+      const pendingSessions = sessions.filter(s => s.status === 'pending');
+
+      if (activeSession) {
+        // Show the next available pending session while current is active
+        const nextPending = pendingSessions[0];
+        updateUI(nextPending || null, false, true);
+      } else {
+        // Default mode: Show the first pending session in the queue
+        updateUI(pendingSessions[0] || null, false, false);
+      }
+    });
+
+    /**
+     * CORE RENDER FUNCTION
+     * Handles dynamic titles and conditional Paddock alerts.
+     */
+    function updateUI(session, showPaddock, isPrepMode = false) {
+      if (!session || !session.drivers || session.drivers.length === 0) {
+        titleEl.innerText = "Upcoming Sessions";
+        titleEl.style.color = "";
+        document.body.style.backgroundColor = "#0a1628";
+        contentDiv.innerHTML = `
+          <div style="margin-top:40px; padding:48px; background:var(--bg-card); border:1px solid var(--border); border-left:4px solid var(--orange); border-radius:6px; text-align:center;">
+            <div style="font-size:clamp(2rem, 5vw, 4rem); font-weight:700; letter-spacing:4px; text-transform:uppercase; color:var(--text); margin-bottom:16px;">No more races today</div>
+            <div style="font-size:clamp(1rem, 2.5vw, 1.8rem); letter-spacing:2px; color:var(--orange);">Check back for the next session.</div>
+          </div>`;
+        return;
+      }
+
+      // 1. Set the title based on current mode
+      if (showPaddock) {
+        titleEl.innerText = "ATTENTION — PROCEED TO PADDOCK";
+        titleEl.style.color = "#dc3545";
+      } else if (isPrepMode) {
+        titleEl.innerText = "NEXT RACE";
+        titleEl.style.color = "var(--orange)";
+      } else {
+        titleEl.innerText = "UPCOMING SESSIONS";
+        titleEl.style.color = "";
+      }
+
+      let html = `<h2>${session.name}</h2>`;
+
+      // 2. Inject Paddock Alert if the flag is active
+      if (showPaddock) {
+        html += `
+            <div class="paddock-alert">
+                <p>Exit the track safely and follow staff instructions.</p>
+            </div>
+        `;
+      }
+
+      // 3. Render Driver Table
+      html += `
+        <table>
+            <thead>
+                <tr>
+                    <th>Driver Name</th>
+                    <th style="text-align: center;">Car Number</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${session.drivers.map(d => `
+                    <tr>
+                        <td>${d.name}</td>
+                        <td style="text-align: center;"><strong>#${d.car}</strong></td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+      `;
+
+      contentDiv.innerHTML = html;
+    }
+  </script>
+</body>
+
+</html>

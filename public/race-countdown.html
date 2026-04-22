@@ -1,0 +1,76 @@
+<!--
+  Public display showing the race countdown timer in large format.
+  Shows the remaining time and the current session name.
+  Updates in real time via Socket.io.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Race Timer - Beachside Racetrack</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body class="page-race-countdown">
+  <button id="fs-btn" class="btn btn-secondary btn-sm fs-btn-left"
+    onclick="document.documentElement.requestFullscreen()">Full Screen</button>
+
+  <div id="status-label">Time Remaining</div>
+  <div id="timer-display">--:--</div>
+
+  <script>
+    const socket = io({ transports: ['websocket'] }); // Force WebSocket only — disables polling fallback
+    const display = document.getElementById('timer-display');
+    const status = document.getElementById('status-label');
+
+    // Converts total seconds into MM:SS format
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    // --- LISTEN FOR SERVER UPDATES ---
+
+    // Update the countdown every second
+    socket.on('timer:update', (data) => {
+      display.innerText = formatTime(data.timeLeft);
+      display.classList.remove('finished');
+      status.innerText = "Race in Progress";
+    });
+
+    // Handle the end of the race
+    socket.on('race:finished', () => {
+      display.innerText = "00:00";
+      display.classList.add('finished');
+      status.innerText = "Race Finished";
+    });
+
+    // Reset display if a new session starts
+    socket.on('race:started', () => {
+      status.innerText = "Ready to start";
+    });
+
+    // --- PERSISTENCE SYNC ---
+    // Immediate state sync upon reconnection.
+    // Ensures the display catches up if the server restarts.
+    socket.on('connect', () => {
+      socket.emit('request:data-refresh');
+    });
+
+    // Sync full race state to recover timer position immediately.
+    socket.on('race:state', (state) => {
+      if (state.isActive && state.timeLeft > 0) {
+        display.innerText = formatTime(state.timeLeft);
+        status.innerText = "Race in Progress";
+        display.classList.remove('finished');
+      }
+    });
+  </script>
+</body>
+
+</html>

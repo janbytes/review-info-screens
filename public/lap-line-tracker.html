@@ -1,0 +1,183 @@
+<!--
+  Interface for the Observer stationed at the lap line.
+  Displays a large button for each car: tap to register a lap as the car crosses the line.
+  Requires authentication with the observer key.
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lap-line Tracker - Beachside Racetrack</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body class="page-lap-tracker">
+
+  <!-- LOGIN SECTION -->
+  <div id="login-section" class="login-wrap">
+    <div>
+      <p class="login-brand">Beachside Racetrack</p>
+      <div class="card login-card">
+        <h2>LAP-LINE TRACKER LOGIN</h2>
+        <input type="password" id="key" placeholder="Enter observer key" onkeydown="if(event.key==='Enter') login()">
+        <button onclick="login()" class="btn btn-primary">Log In</button>
+        <p id="status-message"></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div id="main-content" style="display:none;">
+
+    <div class="page-header">
+      <h1>BEACHSIDE RACETRACK</h1>
+      <span class="subtitle">Lap-line Tracker</span>
+    </div>
+
+    <div class="page-content">
+      <div class="status-info">
+        <div class="status-title">Race Status</div>
+        <div class="status-sub" id="session-info">No active race</div>
+      </div>
+
+      <!-- Lap registration buttons are added dynamically when a race starts -->
+      <div class="grid" id="button-grid"></div>
+
+    </div>
+
+  </div>
+
+  <script>
+    const socket = io({ transports: ['websocket'] }); // Force WebSocket only — disables polling fallback
+    let buttonsCreated = false; // Track if buttons are already on screen
+    // Function to dynamically create buttons based on the list of car numbers
+    function renderButtons(carNumbers) {
+      const grid = document.getElementById('button-grid');
+
+      // Create HTML for each car button provided in the list
+      grid.innerHTML = carNumbers.map(num => `
+    <button class="car-btn" onclick="registerLap('${num}')">#${num}</button>
+  `).join('');
+    }
+
+    // --- AUTHENTICATION ---
+    function login() {
+      const key = document.getElementById('key').value;
+      socket.emit('auth:check', { key: key, role: 'observer' });
+    }
+
+    socket.on('auth:error', (data) => {
+      const status = document.getElementById('status-message');
+      status.style.color = '#e05555';
+      status.innerText = data.message;
+    });
+
+    socket.on('auth:success', () => {
+      document.getElementById('login-section').style.display = 'none';
+      document.getElementById('main-content').style.display = 'block';
+      document.getElementById('status-message').innerText = "";
+      const header = document.querySelector('.page-header');
+      if (header) {
+        header.classList.remove('line-animate');
+        void header.offsetWidth; // force reflow to restart animation
+        header.classList.add('line-animate');
+      }
+    });
+
+    // --- UPDATE STATUS WHEN RACE IS FINISHED (buttons still work) ---
+    socket.on('race:finished', () => {
+      const statusLabel = document.getElementById('session-info');
+      if (statusLabel) {
+        statusLabel.innerText = "Race finished — cars returning";
+        statusLabel.className = "status-sub";
+        statusLabel.style.color = "var(--orange)";
+      }
+    });
+
+    // --- SESSION ENDED (disable all buttons) ---
+    socket.on('race:session-ended', () => {
+      const statusLabel = document.getElementById('session-info');
+
+      const buttons = document.querySelectorAll('.car-btn');
+      buttons.forEach(btn => {
+        btn.disabled = true;
+        btn.style.opacity = '0.5';
+        btn.style.cursor = 'not-allowed';
+      });
+
+      if (statusLabel) {
+        statusLabel.innerText = "Session ended";
+        statusLabel.className = "status-sub";
+        statusLabel.style.color = "#e05555";
+      }
+    });
+
+    // --- TRACKING LOGIC ---
+    function registerLap(carNumber) {
+      // Send registration to server
+      socket.emit('lap:register', { carNumber: carNumber });
+
+      // Visual feedback on the button itself
+      const btn = event.currentTarget;
+      const originalText = "#" + carNumber;
+      btn.innerText = "OK!";
+      btn.style.background = "#27a24f";
+      btn.style.color = "#fff";
+      btn.style.borderColor = "#27a24f";
+      setTimeout(() => {
+        btn.innerText = originalText;
+        btn.style.background = "";
+        btn.style.color = "";
+        btn.style.borderColor = "";
+      }, 300);
+    }
+
+    // --- DYNAMIC UI UPDATES ---
+    socket.on('data:updated', (sessions) => updateUI(sessions));
+
+    // Shows lap buttons when a race is active, clears them when it ends
+    function updateUI(sessions) {
+      const activeSession = sessions.find(s => s.status === 'active');
+      const infoSpan = document.getElementById('session-info');
+      const grid = document.getElementById('button-grid');
+
+      if (activeSession) {
+        infoSpan.innerText = "ACTIVE - " + activeSession.name;
+        infoSpan.className = "status-sub active-race";
+        infoSpan.style.color = "";
+
+        const drivers = activeSession.drivers || [];
+
+        if (drivers.length > 0) {
+          // Only create buttons once per session to avoid re-rendering on every update
+          if (!buttonsCreated) {
+            const carNumbers = drivers
+              .map(d => d.carNumber || d.car)
+              .sort((a, b) => a - b); // Sorts numbers from smallest to largest
+            renderButtons(carNumbers);
+            buttonsCreated = true; // Mark as created
+          }
+        } else {
+          grid.innerHTML = "<p>No drivers assigned to this race.</p>";
+          buttonsCreated = false;
+        }
+
+      } else {
+        infoSpan.innerText = "No active race";
+        infoSpan.className = "status-sub no-race";
+        infoSpan.style.color = "";
+
+        // Reset everything when race ends
+        grid.innerHTML = "";
+        buttonsCreated = false;
+        document.getElementById('status-message').innerText = "";
+      }
+    }
+  </script>
+</body>
+
+</html>
